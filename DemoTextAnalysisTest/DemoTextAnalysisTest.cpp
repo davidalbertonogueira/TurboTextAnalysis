@@ -18,10 +18,15 @@ public:
   DocumentSink();
   virtual ~DocumentSink();
 
-  int PutToken(const std::string &word, int len, int start_pos, internal_TokenKind kind);
-  int PutFeature(const std::string &feature, const std::string &value);
+  int PutToken(const char * word,
+               int len,
+               int start_pos,
+               TokenKind kind);
+  int PutFeature(const char * feature,
+                 const char * value);
   int EndSentence();
-  int PutDocumentFeature(const std::string &feature, const std::string &value);
+  int PutDocumentFeature(const char * feature,
+                         const char * value);
 
   void PrintContent();
 protected:
@@ -30,18 +35,17 @@ protected:
 public:
   std::vector<TokenInfo> token_data;
   std::unordered_map<std::string, std::string> document_data;
-
 };
 
 DocumentSink::DocumentSink() {}
 DocumentSink::~DocumentSink() {}
 
-int DocumentSink::PutToken(const std::string &word,
+int DocumentSink::PutToken(const char * word,
                            int len,
                            int start_pos,
-                           internal_TokenKind kind) {
+                           TokenKind kind) {
   std::cout << "\tPutToken(" << word << ", " << len << ", " << start_pos
-    // << ", " << kind 
+    // << ", " << kind
     << ")" << std::endl;
 
   last_word = word;
@@ -55,8 +59,8 @@ int DocumentSink::PutToken(const std::string &word,
   return 0;
 }
 
-int DocumentSink::PutFeature(const std::string &feature,
-                             const std::string &value) {
+int DocumentSink::PutFeature(const char * feature,
+                             const char * value) {
   std::cout << "\t\tPutFeature(" << feature << ", " << value << ")" << std::endl;
 
   token_data[current_index].token_features[feature] = value;
@@ -69,8 +73,8 @@ int DocumentSink::EndSentence() {
   return 0;
 }
 
-int DocumentSink::PutDocumentFeature(const std::string &feature,
-                                     const std::string &value) {
+int DocumentSink::PutDocumentFeature(const char * feature,
+                                     const char * value) {
   std::cout << "PutDocumentFeature(" << feature << ", " << value << ")" << std::endl;
 
   document_data[feature] = value;
@@ -100,15 +104,33 @@ int main() {
   std::string language = "en";
   std::string path = "../Data/";
   std::string text = u8"Obama visits Portugal. He is staying 3 days.";
-  int retval = text_analyser->LoadLanguage(language, path);
+
+  LoadOptions load_options;
+  load_options.load_tagger = true;
+  load_options.load_parser = false;
+  load_options.load_morphological_tagger = true;
+  load_options.load_entity_recognizer = true;
+  load_options.load_semantic_parser = false;
+  load_options.load_coreference_resolver = false;
+
+  int retval = text_analyser->LoadLanguage(language, path, &load_options);
   if (retval != 0)
     std::cerr << "Lexicon initialization failed, check path and language" << std::endl;
 
   DocumentSink doc_sink; // the output of the Anlyse process will be fed to this
 
-  retval = text_analyser->Analyse(language, 
-                                  text, 
-                                  &doc_sink);
+  AnalyseOptions options;
+  options.use_tagger = true;
+  options.use_parser = false;
+  options.use_morphological_tagger = true;
+  options.use_entity_recognizer = true;
+  options.use_semantic_parser = false;
+  options.use_coreference_resolver = false;
+
+  retval = text_analyser->Analyse(language,
+                                  text,
+                                  &doc_sink,
+                                  &options);
   if (retval != 0)
     std::cerr << "Error in CTurboTextAnalysis Analyse" << std::endl;
 
@@ -116,27 +138,27 @@ int main() {
 
   std::vector<std::vector<std::string>> sentences_words = { { "Obama", "visits", "Portugal", "." },
   { "He", "is", "staying", "3", "days","." } };
-    std::vector<int> sentence_start_positions = { 0, 23 };
-    std::vector<std::vector<int> > sentences_start_positions
-      = { { 0, 6, 13, 21 },
-      { 0, 3, 6, 14, 16, 20 } };
-    std::vector<std::vector<int> > sentences_end_position
-      = { { 5, 12, 21, 22 },
-      { 2, 5, 13, 15, 20, 21 } };
+  std::vector<int> sentence_start_positions = { 0, 23 };
+  std::vector<std::vector<int> > sentences_start_positions
+    = { { 0, 6, 13, 21 },
+    { 0, 3, 6, 14, 16, 20 } };
+  std::vector<std::vector<int> > sentences_end_position
+    = { { 5, 12, 21, 22 },
+    { 2, 5, 13, 15, 20, 21 } };
 
   retval = text_analyser->Analyse(language,
                                   sentences_words,
+                                  {},
                                   sentence_start_positions,
                                   sentences_start_positions,
                                   sentences_end_position,
-                                  &doc_sink);
+                                  &doc_sink,
+                                  &options);
   if (retval != 0)
     std::cerr << "Error in CTurboTextAnalysis Analyse" << std::endl;
 
   //doc_sink.PrintContent();
 
-
   delete text_analyser;
   return 0;
 }
-
