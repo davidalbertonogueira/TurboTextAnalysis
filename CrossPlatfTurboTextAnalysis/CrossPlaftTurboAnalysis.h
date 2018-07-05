@@ -1,7 +1,7 @@
 #ifndef CROSSPLATFTURBOTEXTANALYSIS_TURBOANALYSIS_H
 #define CROSSPLATFTURBOTEXTANALYSIS_TURBOANALYSIS_H
-#include "TurboTextAnalysis\ps_textanalysistemplate.h"
-#include "TurboTextAnalysis\TurboTextAnalysis.h"
+#include "TurboTextAnalysis/ps_textanalysistemplate.h"
+#include "TurboTextAnalysis/TurboTextAnalysis.h"
 #include <string>
 #include <unordered_map>
 
@@ -68,7 +68,7 @@ public:
                                    int passage_offset);
 
   int RetrieveFinalAnswer(const char * language,
-                          const char * answer);
+                          const char ** answer);
 
   int ReturnResults(const char *  language,
                     int max_num_results,

@@ -3,7 +3,10 @@
 #include "TurboTextAnalysis.h"
 #include "TurboParserInterface.h"
 #include "TurboWorkers.h"
+#include "TurboTokenizer.h"
+#include "ICUTokenizer.h"
 #include "glogconfig.h"
+#include "encoding.h"
 
 namespace {
 template <typename TType>
@@ -16,7 +19,16 @@ static bool ReadSettingSafe(libconfig::Setting &setting,
     return false;
   }
   return true;
-}
+};
+template <typename TType>
+inline bool ReadorDefaultLibConfigSetting(const libconfig::Setting &setting,
+                                          const char *name,
+                                          const TType &default_to,
+                                          TType &target) throw() {
+  if (!setting.exists(name) || !setting.lookupValue(name, target))
+    target = default_to;
+  return true;
+};
 
 void SplitString(const std::string &text,
                  char sep,
@@ -31,19 +43,6 @@ void SplitString(const std::string &text,
   std::string temp = text.substr(start);
   if (temp != "") output->push_back(temp);
 };
-
-/**
-* @brief Count the number of utf8 glyphs in string.
-*        Assumes the input string is in utf8.
-* @param[in] str Input utf8 text.
-* @returns Number of utf8 glyphs.
-*/
-size_t CountUtf8Glyphs(const std::string &str) {
-  size_t j = 0;
-  for (const auto &c : str)
-    if ((c & 0xc0) != 0x80) j++;
-  return j;
-}
 }
 
 // Map of workers per language.
@@ -75,7 +74,8 @@ int CTurboTextAnalysis::Analyse(const std::string &language,
   std::vector<int> sentence_start_positions;
   std::vector<int> sentence_end_positions;
 
-  workers->GetTokenizer()->SplitSentences(text, false, false, &sentences,
+  workers->GetTokenizer()->SplitSentences(text,
+                                          &sentences,
                                           &sentence_start_positions,
                                           &sentence_end_positions);
 
@@ -156,64 +156,77 @@ int CTurboTextAnalysis::Analyse(const std::string &language,
     return -1;
   }
 
-  //Change start and end positions from byte-wise to glyph-wise values
-  //The white spaces between tokens (in case of existence), are assumed
-  //to be 1 byte each (same size either byte-wise to glyph-wise).
-  //Current white spaces are " " "\t" "\r" "\n" "\f" "\v", as described in
-  //variable kTurboWhitespaces in TurboTokenizer.cpp
-  std::vector<int> glyphaware_sentence_start_positions;
-  std::vector<
-    std::vector<int> > glyphaware_sentences_start_positions(sentences.size());
-  std::vector<
-    std::vector<int> > glyphaware_sentences_end_positions(sentences.size());
+  if (!workers->tokenizer_outputs_unicode_glyph_aware_offsets()) {
+    //Change start and end positions from byte-wise to glyph-wise values
+    //The white spaces between tokens (in case of existence), are assumed
+    //to be 1 byte each (same size either byte-wise to glyph-wise).
+    //Current white spaces are " " "\t" "\r" "\n" "\f" "\v", as described in
+    //variable kTurboWhitespaces in TurboTokenizer.cpp
+    std::vector<int> glyphaware_sentence_start_positions;
+    std::vector<
+      std::vector<int> > glyphaware_sentences_start_positions(sentences.size());
+    std::vector<
+      std::vector<int> > glyphaware_sentences_end_positions(sentences.size());
 
-  int glyphaware_sentence_curr_pos = 0;
-  for (int i = 0; i < sentences.size(); ++i) {
-    const std::vector<std::string> & sentence_words = sentences_words[i];
-    std::vector<std::string> & original_sentence_words = original_sentences_words[i];
+    int glyphaware_sentence_curr_pos = 0;
+    for (int i = 0; i < sentences.size(); ++i) {
+      const std::vector<std::string> & sentence_words = sentences_words[i];
+      std::vector<std::string> & original_sentence_words = original_sentences_words[i];
 
-    glyphaware_sentence_curr_pos +=
-      (i == 0 ? 0 :
-      (
-       (sentence_start_positions[i] +
-        sentences_start_positions[i][0]) -
-        (sentence_start_positions[i - 1] +
-         sentences_end_positions[i - 1][sentences_end_positions[i - 1].size() - 1])
-        )
-       );
+      glyphaware_sentence_curr_pos +=
+        (i == 0 ? 0 :
+        (
+         (sentence_start_positions[i] +
+          sentences_start_positions[i][0]) -
+          (sentence_start_positions[i - 1] +
+           sentences_end_positions[i - 1][sentences_end_positions[i - 1].size() - 1])
+          )
+         );
 
-    glyphaware_sentence_start_positions.push_back(glyphaware_sentence_curr_pos);
+      glyphaware_sentence_start_positions.push_back(glyphaware_sentence_curr_pos);
 
-    int glyphaware_word_curr_pos = 0;
-    for (int j = 0; j < sentence_words.size(); ++j) {
-      const std::string & word = sentence_words[j];
-      std::string original_word =
-        sentences[i].substr(sentences_start_positions[i][j],
-                            sentences_end_positions[i][j] - sentences_start_positions[i][j]);
-      original_sentence_words.push_back(original_word);
+      int glyphaware_word_curr_pos = 0;
+      for (int j = 0; j < sentence_words.size(); ++j) {
+        const std::string & word = sentence_words[j];
+        std::string original_word =
+          sentences[i].substr(sentences_start_positions[i][j],
+                              sentences_end_positions[i][j] - sentences_start_positions[i][j]);
+        original_sentence_words.push_back(original_word);
 
-      glyphaware_word_curr_pos +=
-        (j == 0 ? 0 : (sentences_start_positions[i][j] -
-                       sentences_end_positions[i][j - 1]));
+        glyphaware_word_curr_pos +=
+          (j == 0 ? 0 : (sentences_start_positions[i][j] -
+                         sentences_end_positions[i][j - 1]));
 
-      int glyph_len = (int)CountUtf8Glyphs(original_word);
+        int glyph_len = (int)CountUtf8Glyphs(original_word);
 
-      glyphaware_sentences_start_positions[i].push_back(glyphaware_word_curr_pos);
-      glyphaware_sentences_end_positions[i].push_back(glyphaware_word_curr_pos + glyph_len);
+        glyphaware_sentences_start_positions[i].push_back(glyphaware_word_curr_pos);
+        glyphaware_sentences_end_positions[i].push_back(glyphaware_word_curr_pos + glyph_len);
 
-      glyphaware_word_curr_pos += glyph_len;
+        glyphaware_word_curr_pos += glyph_len;
+      }
+      glyphaware_sentence_curr_pos += glyphaware_word_curr_pos;
     }
-    glyphaware_sentence_curr_pos += glyphaware_word_curr_pos;
+
+    return Analyse(language,
+                   sentences_words,
+                   original_sentences_words,
+                   glyphaware_sentence_start_positions,
+                   glyphaware_sentences_start_positions,
+                   glyphaware_sentences_end_positions,
+                   pbssink,
+                   options);
+  } else {
+    return Analyse(language,
+                   sentences_words,
+                   original_sentences_words,
+                   sentence_start_positions,
+                   sentences_start_positions,
+                   sentences_end_positions,
+                   pbssink,
+                   options);
   }
 
-  return Analyse(language,
-                 sentences_words,
-                 original_sentences_words,
-                 glyphaware_sentence_start_positions,
-                 glyphaware_sentences_start_positions,
-                 glyphaware_sentences_end_positions,
-                 pbssink,
-                 options);
+
 }
 
 int CTurboTextAnalysis::Analyse(const std::string &language,
@@ -770,6 +783,8 @@ int CTurboTextAnalysis::LoadLanguage(const std::string &lang,
   LoadOptions local_options;
   if (options != nullptr)local_options = *options;
 
+  std::string tokenizer_type = "";
+  bool tokenizer_outputs_unicode_glyph_aware_offsets = false;
   std::string filepath_abbreviations = "";
   std::string filepath_contractions = "";
   std::string filepath_contraction_suffixes = "";
@@ -782,6 +797,8 @@ int CTurboTextAnalysis::LoadLanguage(const std::string &lang,
   std::string filepath_parser_model = "";
   std::string filepath_semantic_parser_model = "";
   std::string filepath_coreference_resolver_model = "";
+
+  TurboTokenizer::TaskOptions tokenizer_options;
 
   std::string filepath_config = path;
   filepath_config += "config.cfg";
@@ -828,30 +845,65 @@ int CTurboTextAnalysis::LoadLanguage(const std::string &lang,
                                     iter_lang);
           if (!read_ok)
             continue;
+
           if (read_ok && iter_lang == lang) {
             language_found = true;
             read_ok = false;
+            if (!ReadorDefaultLibConfigSetting(language,
+                                               "tokenizer_type",
+                                               std::string("standard"),
+                                               tokenizer_type))
+              return false;
+            if (!ReadorDefaultLibConfigSetting(language,
+                                               "tokenizer_outputs_unicode_glyph_aware_offsets",
+                                               false,
+                                               tokenizer_outputs_unicode_glyph_aware_offsets))
+              return false;
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_abbreviations",
+                                                     std::string(""),
+                                                     filepath_abbreviations);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_contractions",
+                                                     std::string(""),
+                                                     filepath_contractions);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_contraction_suffixes",
+                                                     std::string(""),
+                                                     filepath_contraction_suffixes);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_lemmas",
+                                                     std::string(""),
+                                                     filepath_lemmas);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_tagger_model",
+                                                     std::string(""),
+                                                     filepath_tagger_model);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_morphological_tagger_model",
+                                                     std::string(""),
+                                                     filepath_morphological_tagger_model);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_entity_recognizer_model",
+                                                     std::string(""),
+                                                     filepath_entity_recognizer_model);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_parser_model",
+                                                     std::string(""),
+                                                     filepath_parser_model);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_semantic_parser_model",
+                                                     std::string(""),
+                                                     filepath_semantic_parser_model);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "filepath_coreference_resolver_model",
+                                                     std::string(""),
+                                                     filepath_coreference_resolver_model);
 
-            read_ok &= ReadSettingSafe(language, "filepath_abbreviations",
-                                       filepath_abbreviations);
-            read_ok &= ReadSettingSafe(language, "filepath_contractions",
-                                       filepath_contractions);
-            read_ok &= ReadSettingSafe(language, "filepath_contraction_suffixes",
-                                       filepath_contraction_suffixes);
-            read_ok &= ReadSettingSafe(language, "filepath_lemmas",
-                                       filepath_lemmas);
-            read_ok &= ReadSettingSafe(language, "filepath_tagger_model",
-                                       filepath_tagger_model);
-            read_ok &= ReadSettingSafe(language, "filepath_morphological_tagger_model",
-                                       filepath_morphological_tagger_model);
-            read_ok &= ReadSettingSafe(language, "filepath_entity_recognizer_model",
-                                       filepath_entity_recognizer_model);
-            read_ok &= ReadSettingSafe(language, "filepath_parser_model",
-                                       filepath_parser_model);
-            read_ok &= ReadSettingSafe(language, "filepath_semantic_parser_model",
-                                       filepath_semantic_parser_model);
-            read_ok &= ReadSettingSafe(language, "filepath_coreference_resolver_model",
-                                       filepath_coreference_resolver_model);
+            read_ok &= ReadorDefaultLibConfigSetting(language,
+                                                     "break_token_on_hyphen",
+                                                     true,
+                                                     tokenizer_options.break_token_on_hyphen);
 
             if (filepath_abbreviations != "")
               filepath_abbreviations = path + filepath_abbreviations;
@@ -1108,13 +1160,22 @@ int CTurboTextAnalysis::LoadLanguage(const std::string &lang,
       << "will not be accepted, as there is now parser model." << std::endl;
   }
 
-  TurboTokenizer *tokenizer = new TurboTokenizer;
-  if (filepath_abbreviations != "")
-    tokenizer->LoadAbbreviations(filepath_abbreviations);
-  if (filepath_contractions != "")
-    tokenizer->LoadContractions(filepath_contractions);
-  if (filepath_contraction_suffixes != "")
-    tokenizer->LoadContractionSuffixes(filepath_contraction_suffixes);
+  Tokenizer *tokenizer = nullptr;
+  if (tokenizer_type == "icu") {
+    tokenizer = new ICUTokenizer(lang);
+  } else if (tokenizer_type != "standard") {
+    LOG(ERROR) << "tokenizer_type = \"" << tokenizer_type << "\" not recognized." <<
+      "tokenizer_type = \"standard\" will be used.";
+  }
+  if (tokenizer == nullptr) {
+    tokenizer = new TurboTokenizer(tokenizer_options);
+    if (filepath_abbreviations != "")
+      static_cast<TurboTokenizer*>(tokenizer)->LoadAbbreviations(filepath_abbreviations);
+    if (filepath_contractions != "")
+      static_cast<TurboTokenizer*>(tokenizer)->LoadContractions(filepath_contractions);
+    if (filepath_contraction_suffixes != "")
+      static_cast<TurboTokenizer*>(tokenizer)->LoadContractionSuffixes(filepath_contraction_suffixes);
+  }
 
   TurboLemmatizer *lemmatizer = new TurboLemmatizer;
   if (filepath_lemmas != "")
@@ -1180,6 +1241,7 @@ int CTurboTextAnalysis::LoadLanguage(const std::string &lang,
   _worker_map.
     AddLanguageWorkers(lang,
                        tokenizer,
+                       tokenizer_outputs_unicode_glyph_aware_offsets,
                        (local_options.load_tagger) ? lemmatizer : nullptr,
                        (local_options.load_tagger) ? tagger : nullptr,
                        (local_options.load_morphological_tagger) ? morphological_tagger : nullptr,
